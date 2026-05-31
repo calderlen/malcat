@@ -6,7 +6,35 @@
 import os
 from time import time
 import pandas as pd
-from torch.utils.data import Dataset, DataLoader
+import torch
+from torch.utils.data import Dataset
+
+
+def concatenate_folders(folder_list, output_folder, f_ext='.dat2'):
+
+    os.makedirs(output_folder, exist_ok=True)
+
+    # if the output folder is empty, then concatenate the folders. if not empty, then assume the folders have already been concatenated and do nothing
+    if not os.listdir(output_folder):
+        for folder in folder_list:
+            for file in os.listdir(folder):
+                if file.endswith(f_ext):
+                    source_file = os.path.join(folder, file)
+                    destination_file = os.path.join(output_folder, file)
+                    os.symlink(source_file, destination_file)
+
+def normalize_folder_list(lc_folders):
+    if isinstance(lc_folders, (str, os.PathLike)):
+        return [os.fspath(lc_folders)]
+    return [os.fspath(folder) for folder in lc_folders]
+
+def collect_lc_files(lc_folders, f_ext='.dat2'):
+    files = []
+    for folder in normalize_folder_list(lc_folders):
+        for file in os.listdir(folder):
+            if file.endswith(f_ext):
+                files.append(os.path.join(folder, file))
+    return sorted(files)
 
 def load_lc(path):
     cols = ['jd', 'mag', 'mag_err', 'good', 'camera', 'band', 'saturated', 'cam/field']
@@ -14,6 +42,7 @@ def load_lc(path):
     return df
 
 def drop_bad_data(df):
+    #TODO: ensure this is the right convention
     df = df[df['good'] == 1]
     df = df[df['saturated'] == 0]
     return df
@@ -40,50 +69,60 @@ def relative_mag(df, target_col='mag_cam_corr'):
     df['delta_mag'] = df[target_col] - df[target_col].median()
     return df
 
-def numerical_lc(df, time_col='delta_jd', mag_col='delta_mag', mag_err_col='mag_err'):
-    #TODO: for now ignoring mag_err outright since i believe every datapoint has the same 0.1 mag error bar; OR get the better data from skypatrol. decide on whether this is final
-    df_num = df[[time_col, mag_col]].copy()
-    return df_num
+def preprocess_lc(path):
+    df = load_lc(path)
+    df = drop_bad_data(df)
+    df = relative_time(df)
+    df = correct_band_offsets(df)
+    df = correct_camera_offsets(df)
+    df = relative_mag(df)
 
-def normalize_lc_length(df, target_length, time_col='delta_jd', mag_col='delta_mag', mask_col='padding_mask'):
-    # pad or truncate the light curve to the target length. if truncating, find the length of the light curve. then from those data points, drop random sample of datapoints from the light curve until the target length is reached. if padding, add rows of zeros to be masked later.
-
-    lc_len = len(df)
-    
-    if lc_len > target_length:
-        df = df.sample(n=target_length, random_state=7).sort_values(time_col).reset_index(drop=True)
-        df[mask_col] = False
-
-    elif lc_len < target_length:
-        df[mask_col] = False
-        num_pad = target_length - lc_len
-
-        padding = pd.DataFrame({
-            time_col: [0.] * num_pad, 
-            mag_col: [0.] * num_pad, 
-            mask_col: [True] * num_pad})
-        
-        df = pd.concat([df, padding], ignore_index=True)
-        
-    else:
-        df[mask_col] = False
-        
     return df
 
 
 class LightCurveDataset(Dataset):
-    def __init__(self, lc_folder, f_ext='.dat2'):
-        self.lc_folder = lc_folder
-        self.files = [f for f in os.listdir(lc_folder) if f.endswith(f_ext)]
+    
+    def __init__(self, lc_folders, f_ext='.dat2'):
+        # setup the dataset
+        self.lc_folders = normalize_folder_list(lc_folders)
+        self.files = collect_lc_files(self.lc_folders, f_ext=f_ext)
+        self.feature_cols = ['delta_jd', 'delta_mag']
 
-        def __len__(self):
-            return len(self.files)
-        
+    def __len__(self):
+        # return number of examples
+        return len(self.files)
+    
+    def __getitem__(self, idx):
+        # return one example
+        path = self.files[idx]
+        df = preprocess_lc(path)
 
 
+        x = torch.tensor(df[self.feature_cols].values, dtype=torch.float32)
 
+        return {
+            'lc': x,
+            'filename': os.path.basename(path),
+            'path': path,
+        }
 
-            return df[self.cols]
+def collate_lcs(batch):
+    batch_size = len(batch)
+    max_len = max(item['lc'].shape[0] for item in batch)
+    feature_dim = batch[0]['lc'].shape[1]
 
+    padded_lc = torch.zeros(batch_size, max_len, feature_dim, dtype=torch.float32)
+    padding_mask = torch.ones(batch_size, max_len, dtype=torch.bool)
 
-# now create tensors for the transformer model
+    for i, item in enumerate(batch):
+        lc = item['lc']
+        lc_len = lc.shape[0]
+        padded_lc[i, :lc_len] = lc
+        padding_mask[i, :lc_len] = False
+
+    return {
+        'lc': padded_lc,
+        'mask': padding_mask,
+        'filename': [item['filename'] for item in batch],
+        'path': [item['path'] for item in batch],
+    }

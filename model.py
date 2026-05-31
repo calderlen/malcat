@@ -7,8 +7,6 @@ def relative_time_encoding()
 
 
 
-
-# the malcat transformer model
 class malcat(nn.Transformer):
     def __init__(self, 
                  dim_model=512, 
