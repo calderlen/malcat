@@ -4,13 +4,14 @@
 # so ingest the dat2 files
 
 import os
+from time import time
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 
 def load_lc(path):
     cols = ['jd', 'mag', 'mag_err', 'good', 'camera', 'band', 'saturated', 'cam/field']
     df = pd.read_csv(path, sep=r'\s+', header=None, names=cols)
-    return 
+    return df
 
 def drop_bad_data(df):
     df = df[df['good'] == 1]
@@ -22,16 +23,16 @@ def relative_time(df):
     df['delta_jd'] = df['jd'] - df['jd'].min()
     return df
 
-def correct_band_offsets(df, target_col='mag'):
+def correct_band_offsets(df, target_col='mag', output_col='mag_band_corr'):
     # compute median of each band, then subtract the median of each band from the magnitudes in that band to get the corrected magnitudes
     df_band_med = df.groupby('band')[target_col].transform('median')
-    df[target_col] = df[target_col] - df_band_med
+    df[output_col] = df[target_col] - df_band_med
     return df
 
-def correct_camera_offsets(df, target_col='mag_band_corr'):
+def correct_camera_offsets(df, target_col='mag_band_corr', output_col='mag_cam_corr'):
     # compute median of each camera, then subtract the median of each camera from the magnitudes in that camera to get the corrected magnitudes
     df_cam_med = df.groupby('camera')[target_col].transform('median')
-    df[target_col] = df[target_col] - df_cam_med
+    df[output_col] = df[target_col] - df_cam_med
     return df
 
 def relative_mag(df, target_col='mag_cam_corr'):
@@ -44,30 +45,30 @@ def numerical_lc(df, time_col='delta_jd', mag_col='delta_mag', mag_err_col='mag_
     df_num = df[[time_col, mag_col]].copy()
     return df_num
 
-def normalize_lc_length(df, target_length):
-    # pad or truncate the light curve to the target length. if truncating, find the length of the light curve. then from those data points, drop random sample from the uniform distribution of datapoints from the light curve until the target length is reached. if padding, add rows of zeros plus a jitter term with the jitter value drwan from a gaussian distribution estimated by a camera-agnostic dispersion of the magnitudes in the light curve.
+def normalize_lc_length(df, target_length, time_col='delta_jd', mag_col='delta_mag', mask_col='padding_mask'):
+    # pad or truncate the light curve to the target length. if truncating, find the length of the light curve. then from those data points, drop random sample of datapoints from the light curve until the target length is reached. if padding, add rows of zeros to be masked later.
 
     lc_len = len(df)
-
-    if lc_len == target_length:
-        pass
     
     if lc_len > target_length:
-        df = df.sample(n=target_length, random_state=7).sort_values('delta_jd').reset_index(drop=True)
+        df = df.sample(n=target_length, random_state=7).sort_values(time_col).reset_index(drop=True)
+        df[mask_col] = False
 
-    elif lc_len < target_length: # pad with zeros and jitter
-
+    elif lc_len < target_length:
+        df[mask_col] = False
         num_pad = target_length - lc_len
-        avg_dt = df[time_col].diff().mean()
 
-
-        padding = pd.DataFrame({'delta_jd': [0] * (target_length - len(df)), 'delta_mag': [0] * (target_length - len(df))})
+        padding = pd.DataFrame({
+            time_col: [0.] * num_pad, 
+            mag_col: [0.] * num_pad, 
+            mask_col: [True] * num_pad})
+        
         df = pd.concat([df, padding], ignore_index=True)
         
+    else:
+        df[mask_col] = False
+        
     return df
-
-#TODO: need to correct for per-camera offsets and per-band offsets
-
 
 
 class LightCurveDataset(Dataset):
