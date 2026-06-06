@@ -1,10 +1,4 @@
-# interate through the light curve files
-# these are flat in the output bundles
-# each has a raw2 and dat2 -- raw2 can likely be neglected for now b/c the transformer may learn these features on its own -- dont want to overcode
-# so ingest the dat2 files
-
 import os
-from time import time
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
@@ -36,10 +30,39 @@ def collect_lc_files(lc_folders, f_ext='.dat2'):
                 files.append(os.path.join(folder, file))
     return sorted(files)
 
-def load_lc(path):
+def _load_lc_fallback(path):
     cols = ['jd', 'mag', 'mag_err', 'good', 'camera', 'band', 'saturated', 'cam/field']
     df = pd.read_csv(path, sep=r'\s+', header=None, names=cols)
     return df
+
+
+def _canonical_to_malcat_frame(df):
+    return pd.DataFrame(
+        {
+            'jd': pd.to_numeric(df['jd'], errors='coerce'),
+            'mag': pd.to_numeric(df['mag'], errors='coerce'),
+            'mag_err': pd.to_numeric(df['mag_err'], errors='coerce'),
+            'good': df['is_good'].astype(int),
+            'camera': df['camera'].astype(str),
+            'band': df['band'].astype(str),
+            'saturated': df['saturated'].astype(int),
+            'cam/field': df['camera_field'].astype(str),
+        }
+    )
+
+
+def load_lc(path):
+    try:
+        from malca.lightcurve_io import load_lightcurve_df
+    except ImportError:
+        return _load_lc_fallback(path)
+
+    try:
+        df = load_lightcurve_df(path, apply_quality=False)
+    except Exception:
+        return _load_lc_fallback(path)
+    return _canonical_to_malcat_frame(df)
+
 
 def drop_bad_data(df):
     #TODO: ensure this is the right convention

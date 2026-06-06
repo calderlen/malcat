@@ -3,7 +3,9 @@ import os
 import torch
 from torch.utils.data import DataLoader, random_split
 
-from ingest import LightCurveDataset, collate_lcs
+from .ingest import LightCurveDataset, collate_lcs
+from .loss import masked_mse_loss
+from .model import Malcat
 
 # train one epoch
 def train_epoch(model, dataloader, optimizer, loss_fn, device):
@@ -18,7 +20,7 @@ def train_epoch(model, dataloader, optimizer, loss_fn, device):
 
         optimizer.zero_grad()
         output = model(lc, mask)
-        loss = loss_fn(output, lc)
+        loss = loss_fn(output, lc, mask)
         
         loss.backward()
         optimizer.step()
@@ -40,7 +42,7 @@ def validate(model, dataloader, loss_fn, device):
             mask = batch['mask'].to(device)
 
             output = model(lc, mask)
-            loss = loss_fn(output, lc)
+            loss = loss_fn(output, lc, mask)
             
             total_loss += loss.item()
 
@@ -88,11 +90,9 @@ def main():
         collate_fn=collate_lcs,
     )
 
-    from model import malcat
-
-    model = malcat().to(device)
+    model = Malcat().to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-    loss_fn = torch.nn.MSELoss()
+    loss_fn = masked_mse_loss
 
     best_val_loss = float('inf')
     epochs_without_improvement = 0

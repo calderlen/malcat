@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "malcat"
+version = "0.1a0"
+description = "MALCAT: Transformer models for ASAS-SN light curves"
+requires-python = ">=3.9"
+authors = [{ name = "Calder Lenhart" }]
+dependencies = [
+    "pandas",
+    "torch",
+]
+
+[project.optional-dependencies]
+malca = ["malca"]
+
+[project.scripts]
+malcat-train = "malcat.train:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["malcat*"]
